@@ -1,0 +1,56 @@
+name: Bootstrap and Deploy
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  x86_64-linux:
+    name: x86_64 Linux
+    if: contains(github.ref, 'refs/tags/')
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Determine package name
+        run: echo "PKG_NAME=justbuild-${GITHUB_REF##*/}-x86_86-linux" >> $GITHUB_ENV
+
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Run Docker image
+        run: docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+
+      - name: Bootstrap
+        run: |
+          docker exec ubuntu apt update
+          docker exec ubuntu apt install --yes wget python3 clang libstdc++-10-dev unzip patch
+          docker exec ubuntu ./bin/bootstrap.py . /tmp
+
+      - name: Build man pages
+        run: |
+          docker exec ubuntu apt install --yes pandoc
+          docker exec ubuntu mkdir -p /tmp/out/share/man/man1 /tmp/out/share/man/man5
+          docker exec ubuntu pandoc -s -t man ./share/man/just.1.org -o /tmp/out/share/man/man1/just.1
+          docker exec ubuntu pandoc -s -t man ./share/man/just-mr.1.org -o /tmp/out/share/man/man1/just-mr.1
+          docker exec ubuntu pandoc -s -t man ./share/man/just-mrrc.5.org -o /tmp/out/share/man/man5/just-mrrc.5
+          docker exec ubuntu pandoc -s -t man ./share/man/just-graph-file.5.org -o /tmp/out/share/man/man5/just-graph-file.5
+          docker exec ubuntu pandoc -s -t man ./share/man/just-repository-config.5.org -o /tmp/out/share/man/man5/just-repository-config.5
+          docker exec ubuntu pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o /tmp/out/share/man/man5/just-mr-repository-config.5
+
+      - name: Create package
+        run: |
+          docker exec ubuntu cp ./bin/just-mr.py /tmp/out/bin/just-mr
+          docker exec ubuntu mkdir -p /tmp/out/etc/bash_completion.d
+          docker exec ubuntu cp ./share/just_complete.bash /tmp/out/etc/bash_completion.d/just
+          docker exec ubuntu cp ./share/just-mr_complete.bash /tmp/out/etc/bash_completion.d/just-mr
+          docker exec ubuntu mv /tmp/out $PKG_NAME
+          docker exec ubuntu tar -czvf $PKG_NAME.tar.gz $PKG_NAME
+
+      - name: Upload package
+        uses: svenstaro/upload-release-action@1.1.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: "*.tar.gz"
+          tag: ${{ github.ref }}
+          overwrite: true
+          file_glob: true
