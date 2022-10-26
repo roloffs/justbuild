@@ -1,0 +1,69 @@
+name: Bootstrap and Deploy
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  x86_64-linux:
+    name: x86_64 Linux
+    if: contains(github.ref, 'refs/tags/')
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Determine package name
+        run: echo "PKG_NAME=justbuild-${GITHUB_REF##*/}-x86_86-linux" >> $GITHUB_ENV
+
+      - name: Checkout sources
+        uses: actions/checkout@v3
+
+      - name: Run and prepare docker image
+        run: |
+          docker run -it -d --name ubuntu -v $GITHUB_WORKSPACE:/workspace -w /workspace ubuntu:20.04
+          docker exec ubuntu apt update
+
+      - name: Bootstrap justbuild
+        run: |
+          docker exec ubuntu bash -c "\
+            apt install --yes wget python3 clang libstdc++-10-dev unzip patch; \
+            ./bin/bootstrap.py . /tmp/justbuild"
+
+      - name: Build man pages
+        run: |
+          docker exec ubuntu bash -c "\
+            apt install --yes pandoc; \
+            mkdir -p $PKG_NAME/share/man/man{1,5}; \
+            pandoc -s -t man ./share/man/just.1.org -o $PKG_NAME/share/man/man1/just.1; \
+            pandoc -s -t man ./share/man/just-mr.1.org -o $PKG_NAME/share/man/man1/just-mr.1; \
+            pandoc -s -t man ./share/man/just-mrrc.5.org -o $PKG_NAME/share/man/man5/just-mrrc.5; \
+            pandoc -s -t man ./share/man/just-graph-file.5.org -o $PKG_NAME/share/man/man5/just-graph-file.5; \
+            pandoc -s -t man ./share/man/just-repository-config.5.org -o $PKG_NAME/share/man/man5/just-repository-config.5; \
+            pandoc -s -t man ./share/man/just-mr-repository-config.5.org -o $PKG_NAME/share/man/man5/just-mr-repository-config.5"
+
+      - name: Create package
+        run: |
+          docker exec ubuntu bash -c "\
+            mkdir -p $PKG_NAME/{bin,etc/bash_completion.d}; \
+            cp /tmp/justbuild/out/bin/just $PKG_NAME/bin/just; \
+            cp ./bin/just-mr.py $PKG_NAME/bin/just-mr; \
+            cp ./share/just_complete.bash $PKG_NAME/etc/bash_completion.d/just; \
+            cp ./share/just-mr_complete.bash $PKG_NAME/etc/bash_completion.d/just-mr"
+          tar -czvf $PKG_NAME.tar.gz $PKG_NAME
+          sha256sum $PKG_NAME.tar.gz | tee SHA256SUMS
+
+      - name: Upload package checksum
+        uses: actions/upload-artifact@v3
+        with:
+          name: SHA256SUMS
+          path: SHA256SUMS
+          if-no-files-found: error
+
+      - name: Upload package release
+        uses: xresloader/upload-to-github-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          file: "*.tar.gz;SHA256SUMS"
+          tags: true
+          draft: false
+          overwrite: true
